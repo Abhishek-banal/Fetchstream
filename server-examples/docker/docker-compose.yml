@@ -1,0 +1,25 @@
+services:
+  fetchstream-runner:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: fetchstream-runner
+    restart: unless-stopped
+    ports:
+      - "${PORT:-8000}:8000"
+    environment:
+      - PORT=8000
+      - API_KEY=${API_KEY:-}
+      - TELEGRAM_API_ID=${TG_API_ID:-6}
+      - TELEGRAM_API_HASH=${TG_API_HASH:-eb06d4abfb49dc3eeb1aeb98ae0f581e}
+      - TELEGRAM_LOCAL=true
+    volumes:
+      - telegram-data:/var/lib/telegram-bot-api
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  telegram-data:

@@ -1,0 +1,23 @@
+{
+  "_meta": {
+    "versions": {
+      "stable": "1.0.0",
+      "beta": ""
+    },
+    "last_updated": "2026-09-20T00:00:00Z",
+    "author": "FetchStream (Abhishek)"
+  },
+  "links": {
+    "website": "https://fetchstream.in/",
+    "faq": "https://fetchstream.in/#faq",
+    "privacy": "https://fetchstream.in/#privacy",
+    "apiDocs": "https://fetchstream.in/documentation.html",
+    "blocking": "https://fetchstream.in/#blocking",
+    "download_stable": "https://github.com/Abhishek-banal/fetchstream/releases/latest/download/fetchstream-extension.zip",
+    "download_beta": ""
+  },
+  "blocked_domains": [
+    "example1.com",
+    "example2.com"
+  ]
+}

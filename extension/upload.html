@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="en" data-bs-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FetchStream - Upload Center</title>
+    <link rel="stylesheet" href="bootstrap/css/bootstrap.min.css">
+    <link rel="stylesheet" href="bootstrap/icons/bootstrap-icons.min.css">
+    <style>
+        :root {
+            color-scheme: light !important;
+            --bg-page: #f8fafc;
+            --bg-surface: #ffffff;
+            --border-clr: #e2e8f0;
+            --primary: #0ea5e9;
+            --primary-hover: #0284c7;
+        }
+
+        body {
+            background-color: var(--bg-page);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            color: #0f172a;
+        }
+        
+        .navbar-brand {
+            font-weight: 700;
+            letter-spacing: -0.5px;
+            color: var(--primary) !important;
+        }
+        
+        .upload-card {
+            background-color: var(--bg-surface);
+            border: 1px solid var(--border-clr);
+            border-radius: 16px;
+            padding: 24px;
+            box-shadow: 0 4px 14px rgba(15, 23, 42, 0.04);
+            margin-bottom: 20px;
+        }
+
+        .drop-zone {
+            border: 2px dashed var(--border-clr);
+            border-radius: 12px;
+            padding: 36px 24px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            background-color: #f8fafc;
+        }
+
+        .drop-zone:hover, .drop-zone.dragover {
+            border-color: var(--primary);
+            background-color: rgba(2, 132, 199, 0.05);
+        }
+
+        .queue-card {
+            background-color: #ffffff;
+            border: 1px solid var(--border-clr);
+            border-radius: 12px;
+            padding: 16px 20px;
+            box-shadow: 0 2px 8px rgba(15, 23, 42, 0.03);
+            margin-bottom: 12px;
+            transition: border-color 0.2s, box-shadow 0.2s;
+        }
+        .queue-card:hover {
+            border-color: #cbd5e1;
+            box-shadow: 0 4px 12px rgba(15, 23, 42, 0.06);
+        }
+
+        .multi-link-box {
+            font-size: 0.8rem;
+            padding: 4px 8px;
+            border-radius: 6px;
+            background-color: #f8fafc;
+            border: 1px solid #e2e8f0;
+        }
+
+        .status-badge {
+            font-size: 0.7rem;
+            padding: 4px 8px;
+            border-radius: 6px;
+        }
+
+        .item-progress-bar {
+            transition: width 0.3s ease;
+        }
+
+        .btn-action-icon {
+            width: 28px;
+            height: 28px;
+            padding: 0;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 6px;
+        }
+    </style>
+</head>
+<body>
+    <nav class="navbar navbar-expand-lg navbar-light bg-white border-bottom sticky-top shadow-sm">
+        <div class="container-fluid px-4">
+            <a class="navbar-brand d-flex align-items-center gap-2" href="#">
+                <i class="bi bi-cloud-arrow-up-fill fs-4 text-primary"></i>
+                FetchStream Upload
+            </a>
+            <div class="d-flex align-items-center gap-3">
+                <a href="downloader.html" class="btn btn-sm btn-outline-secondary rounded-pill px-3">
+                    <i class="bi bi-arrow-left me-1"></i> Back to Dashboard
+                </a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container max-w-4xl py-4" style="max-width: 900px;">
+        
+        <!-- Cloud-to-Cloud URL Upload Card -->
+        <div class="upload-card mb-4 border-primary border-opacity-50">
+            <div class="d-flex align-items-center mb-3">
+                <i class="bi bi-cloud-arrow-down fs-4 text-primary me-2"></i>
+                <h6 class="mb-0 fw-bold">URL Downloader/Uploader</h6>
+            </div>
+            <p class="small text-muted mb-3">Paste a direct link to a file (.mp4, .iso, .zip) or an HLS stream (.m3u8). The cloud server will download and re-upload it directly to your destination without using your device's bandwidth.</p>
+            <div class="d-flex flex-column gap-2">
+                <div class="position-relative">
+                    <input type="url" id="serverUrlInput" class="form-control form-control-sm pe-5" placeholder="https://example.com/movie.mp4">
+                    <div id="urlFetchSpinner" class="spinner-border spinner-border-sm text-primary position-absolute d-none" style="right: 10px; top: 8px; width: 0.8rem; height: 0.8rem;" role="status"></div>
+                </div>
+                
+                <input type="text" id="serverUrlFileNameInput" class="form-control form-control-sm" placeholder="Filename (e.g. video.mp4)" style="display: none;">
+                
+                <!-- HLS Variants Container -->
+                <div id="urlUploadVariantsContainer" class="d-flex flex-column gap-1 d-none" style="margin-top: -2px; margin-bottom: 2px;">
+                  <div class="d-flex gap-2 align-items-center">
+                    <select id="urlUploadVariantSelect" class="form-select form-select-sm" style="font-size: 0.85rem; padding: 4px 8px; min-width: 0;"></select>
+                    <button id="urlUploadWatchBtn" class="btn btn-sm btn-primary py-1 px-3 d-flex align-items-center gap-1" style="font-size: 0.8rem;"><i class="bi bi-play-fill"></i> Watch</button>
+                  </div>
+                </div>
+
+                <div id="urlUploadCaptionContainer" class="telegram-caption-row d-none mt-2 mb-2">
+                    <div class="input-group input-group-sm">
+                        <span class="input-group-text bg-light text-info py-0 px-2" style="font-size: 0.85rem; border-color: #cbd5e1;">
+                            <i class="bi bi-telegram me-1"></i> Caption
+                        </span>
+                        <input id="urlUploadCaptionInput" type="text" class="form-control form-control-sm py-0.5 px-2" placeholder="Description sent to Telegram..." style="font-size: 0.85rem; border-color: #cbd5e1;" spellcheck="false">
+                    </div>
+                </div>
+                
+                <div class="d-flex gap-2">
+                    <div class="dropdown flex-grow-1">
+                        <button type="button" id="urlUploadServiceSelectBtn" class="btn btn-sm btn-outline-secondary w-100 dropdown-toggle text-start d-flex justify-content-between align-items-center" data-bs-toggle="dropdown" aria-expanded="false" style="background: white;">
+                            <span><i class="bi bi-cloud-arrow-up me-1"></i> <span id="urlUploadServiceSelectText">Dest: GoFile</span></span>
+                        </button>
+                        <ul class="dropdown-menu shadow-sm" id="urlUploadDropdownMenu" style="font-size: 0.85rem; min-width: 100%;">
+                            <li><button class="dropdown-item py-1" type="button" data-service="gofile.io"><i class="bi bi-cloud-arrow-up me-1.5 text-success"></i> GoFile</button></li>
+                            <li><button class="dropdown-item py-1" type="button" data-service="buzzheavier.com"><i class="bi bi-lightning-charge me-1.5 text-warning"></i> Buzzheavier</button></li>
+                            <li><button class="dropdown-item py-1" type="button" data-service="fuckingfast.co"><i class="bi bi-speedometer2 me-1.5 text-danger"></i> FFast</button></li>
+                            <li><button class="dropdown-item py-1" type="button" data-service="storage.to"><i class="bi bi-hdd me-1.5 text-info"></i> Storage.to</button></li>
+                            <li><button class="dropdown-item py-1" type="button" data-service="catbox.moe"><i class="bi bi-box-seam me-1.5 text-secondary"></i> Catbox</button></li>
+                            <li><button class="dropdown-item py-1" type="button" data-service="pixeldrain.com"><i class="bi bi-droplet-half me-1.5" style="color: #6366f1;"></i> Pixeldrain</button></li>
+                            <li><button class="dropdown-item py-1" type="button" data-service="s3_compatible"><i class="bi bi-database me-1.5 text-primary"></i> S3 / R2 / MinIO</button></li>
+                            <li><button class="dropdown-item py-1" type="button" data-service="telegram"><i class="bi bi-telegram me-1.5 text-info"></i> Telegram</button></li>
+                            <li><hr class="dropdown-divider"></li>
+                            <li><button class="dropdown-item py-1 text-primary fw-bold" type="button" id="multiHostBtn"><i class="bi bi-check2-square me-1.5 text-primary"></i> Custom Multi-Host Selection...</button></li>
+                            <li><button class="dropdown-item py-1 text-primary" type="button" data-service="all"><i class="bi bi-layers-fill me-1.5"></i> All Working Services</button></li>
+                        </ul>
+                    </div>
+                    
+                    <div class="d-flex gap-1 flex-shrink-0">
+                        <button id="urlDownloadLocalBtn" class="btn btn-sm btn-outline-success" title="Download to PC"><i class="bi bi-download"></i></button>
+                        <button id="urlUploadLocalBtn" class="btn btn-sm btn-outline-info" title="Local Upload (via Browser)"><i class="bi bi-pc-display"></i></button>
+                        <button id="serverUploadSubmitBtn" class="btn btn-sm btn-primary" disabled>
+                            <i class="bi bi-rocket-takeoff"></i> Cloud Runner
+                        </button>
+                    </div>
+                    <button id="serverUploadStateBadge" type="button" class="btn btn-link btn-sm text-decoration-none text-muted px-0 mt-1 text-start" style="font-size: 0.72rem;">
+                        <i class="bi bi-lock-fill me-1"></i><span>Unlock Vault</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Main Upload Selector Card -->
+        <div class="upload-card">
+            <div class="row g-3 align-items-center mb-3">
+                <div class="col-md-7">
+                    <label for="serviceSelect" class="form-label fw-bold mb-1">
+                        <i class="bi bi-hdd-network me-1 text-primary"></i> Default Upload Destination Service
+                    </label>
+                    <select class="form-select form-select-sm" id="serviceSelect">
+                        <option value="all">All Working Services</option>
+                        <option value="custom" class="text-primary fw-bold">Custom Multi-Host List</option>
+                        <optgroup label="Direct & Public File Hosts">
+                              <option value="gofile.io">GoFile</option>
+                              <option value="buzzheavier.com">Buzzheavier</option>
+                              <option value="fuckingfast.co">FFast</option>
+                              <option value="storage.to">Storage.to</option>
+                              <option value="catbox.moe">Catbox.moe</option>
+                          </optgroup>
+                          <optgroup label="Personal Cloud Drives">
+                              <option value="pixeldrain.com">Pixeldrain</option>
+                              <option value="s3_compatible">S3 / R2 / MinIO Compatible</option>
+                          </optgroup>
+                          <optgroup label="Messaging">
+                              <option value="telegram">Telegram Bot</option>
+                          </optgroup>
+                    </select>
+
+                    <div class="d-flex align-items-center gap-2 mt-2">
+                        <div class="form-check mb-0">
+                        <input class="form-check-input" type="checkbox" id="manualServiceMode">
+                        <label class="form-check-label small text-muted" for="manualServiceMode">Choose upload service manually for each item</label>
+                        </div>
+                        <button type="button" class="btn btn-sm btn-link text-primary p-0 d-none" id="editDefaultCustomListBtn">Edit Custom List</button>
+                    </div>
+
+                    <div id="manualUploadCaptionContainer" class="telegram-caption-row d-none mt-2 mb-0">
+                        <div class="input-group input-group-sm">
+                            <span class="input-group-text bg-light text-info py-0 px-2" style="font-size: 0.72rem; border-color: #cbd5e1;">
+                                <i class="bi bi-telegram me-1"></i> Caption
+                            </span>
+                            <input id="manualUploadCaptionInput" type="text" class="form-control form-control-sm py-0.5 px-2" placeholder="Description sent to Telegram..." style="font-size: 0.75rem; border-color: #cbd5e1;" spellcheck="false">
+                        </div>
+                    </div>
+
+                    <small id="serviceHelp" class="text-muted d-block" style="font-size: 0.74rem;">Default upload destination for queued items. Each item below can also be individually routed.</small>
+                    <div class="alert alert-light border py-1.5 px-2.5 small text-muted mt-2 mb-0" style="font-size: 0.72rem; line-height: 1.35;">
+                        <i class="bi bi-shield-exclamation text-warning me-1"></i> <strong>Third-Party &amp; Lawful Use Notice:</strong> FetchStream is an independent utility and is not affiliated with, endorsed by, or partnered with GoFile, Pixeldrain, Catbox, or any other provider. FetchStream does not store, host, inspect, or moderate your files. Users are solely responsible for ensuring uploaded content is lawful and compliant with copyright terms.
+                    </div>
+                </div>
+                <div class="col-md-5 d-flex justify-content-md-end gap-2 align-items-end pt-3 pt-md-0">
+                    <button id="selectFilesBtn" class="btn btn-sm btn-outline-primary px-3 rounded-pill">
+                        <i class="bi bi-files me-1"></i> Choose Files
+                    </button>
+                    <button id="selectFolderBtn" class="btn btn-sm btn-outline-secondary px-3 rounded-pill" title="Upload folder as ZIP">
+                        <i class="bi bi-folder-plus me-1"></i> Choose Folder
+                    </button>
+                </div>
+            </div>
+
+            <!-- Notification Container (Folder zip conversion etc.) -->
+            <div id="zipNotice" class="alert alert-info py-2 px-3 small d-none mb-3" style="font-size: 0.8rem;">
+                <div class="d-flex align-items-center justify-content-between gap-2 mb-1">
+                    <div class="d-flex align-items-center gap-2">
+                        <div class="spinner-border spinner-border-sm text-primary flex-shrink-0" role="status"></div>
+                        <span id="zipNoticeText">Folder detected. Converting folder to ZIP before uploading...</span>
+                    </div>
+                    <button id="cancelZipBtn" class="btn btn-sm btn-outline-danger py-0 px-2" style="font-size: 0.75rem;">Cancel</button>
+                </div>
+                <div class="progress mt-2" style="height: 6px;">
+                    <div id="zipNoticeProgressBar" class="progress-bar progress-bar-striped progress-bar-animated bg-info" role="progressbar" style="width: 0%;"></div>
+                </div>
+            </div>
+
+            <!-- Drag & Drop Area -->
+            <div class="drop-zone" id="dropZone">
+                <i class="bi bi-cloud-arrow-up text-primary" style="font-size: 2.8rem;"></i>
+                <h6 class="fw-bold mt-2 mb-1">Drag &amp; Drop Files or Folders Here</h6>
+                <p class="text-muted small mb-0">or use the buttons above to select multiple files or a whole folder</p>
+                <input type="file" id="fileInput" multiple style="display:none;">
+                <input type="file" id="folderInput" webkitdirectory directory multiple style="display:none;">
+            </div>
+
+            <!-- Overall Action Buttons -->
+            <div class="d-flex justify-content-between align-items-center mt-3 flex-wrap gap-2">
+                <div class="d-flex gap-2">
+                    <button id="startUploadBtn" class="btn btn-sm btn-primary px-4 rounded-pill" disabled>
+                        <i class="bi bi-play-fill me-1"></i> Start Upload
+                    </button>
+                    <button id="pauseAllBtn" class="btn btn-sm btn-outline-warning px-3 rounded-pill" disabled>
+                        <i class="bi bi-pause-fill me-1"></i> Pause All
+                    </button>
+                    <button id="cancelAllBtn" class="btn btn-sm btn-outline-danger px-3 rounded-pill" disabled>
+                        <i class="bi bi-x-circle me-1"></i> Cancel All
+                    </button>
+                </div>
+                <div class="d-flex align-items-center gap-3">
+                    <div id="uploadSummary" class="text-end d-none">
+                        <div class="fw-bold text-dark small" id="summaryPercent">0%</div>
+                        <div class="text-muted" style="font-size: 0.75rem;" id="summaryText">0 / 0 items completed</div>
+                    </div>
+                    <button id="clearQueueBtn" class="btn btn-sm btn-outline-secondary px-3 rounded-pill" disabled>
+                        <i class="bi bi-trash me-1"></i> Clear Finished
+                    </button>
+                </div>
+            </div>
+            
+            <div class="progress mt-3 d-none" style="height: 6px; border-radius: 4px;" id="summaryProgress">
+                <div class="progress-bar bg-success progress-bar-striped progress-bar-animated" role="progressbar" style="width: 0%;"></div>
+            </div>
+        </div>
+
+        <!-- Queue List -->
+        <div class="d-flex justify-content-between align-items-center mb-2 px-1">
+            <h6 class="fw-bold mb-0 text-dark">Upload Queue <span class="badge bg-secondary ms-1" id="queueCount">0</span></h6>
+        </div>
+        
+        <div id="queueList"></div>
+        
+        <div id="emptyQueue" class="text-center py-4 bg-white rounded-3 border">
+            <i class="bi bi-cloud-upload text-muted" style="font-size: 2.5rem;"></i>
+            <h6 class="fw-bold mt-2 text-dark">No Files in Queue</h6>
+            <p class="text-muted small mb-0">Select or drop files to upload them.</p>
+        </div>
+    </div>
+
+    <!-- Large Folder Warning Modal (>100MB) -->
+    <div class="modal fade" id="largeFolderModal" tabindex="-1" aria-labelledby="largeFolderModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content border-0 shadow">
+                <div class="modal-header bg-warning bg-opacity-10 border-bottom border-warning border-opacity-25 py-2.5">
+                    <h6 class="modal-title fw-bold text-dark d-flex align-items-center gap-2 mb-0" id="largeFolderModalLabel">
+                        <i class="bi bi-exclamation-triangle-fill text-warning fs-5"></i> Large Folder Detected (>500MB)
+                    </h6>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body p-3">
+                    <p class="mb-2">The selected folder <strong id="largeFolderName" class="text-dark">folder</strong> is <strong id="largeFolderSize" class="text-danger">120MB</strong> in size.</p>
+                    <div class="alert alert-info py-2 px-3 small mb-2 border-info">
+                        <i class="bi bi-info-circle-fill me-1"></i> <strong>Advisory:</strong> FetchStream now uses advanced OPFS (Origin Private File System) streaming for ZIP packaging. This prevents browser crashes and uses minimal RAM.
+                    </div>
+                    <p class="small text-muted mb-0">
+                        However, zipping very large folders directly in the browser may still take a few moments. If preferred, you can still compress this folder into a <strong>.zip file on your computer first</strong> and upload that directly.
+                    </p>
+                </div>
+                <div class="modal-footer bg-light py-2 px-3 justify-content-between">
+                    <button type="button" class="btn btn-sm btn-outline-secondary px-3" id="cancelLargeFolderBtn" data-bs-dismiss="modal">
+                        <i class="bi bi-x-circle me-1"></i> Cancel &amp; Zip First (Recommended)
+                    </button>
+                    <button type="button" class="btn btn-sm btn-warning px-3 fw-bold" id="proceedLargeFolderBtn">
+                        <i class="bi bi-arrow-right-circle me-1"></i> Proceed Anyway
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Pre-Flight Conflict Modal -->
+    <div class="modal fade" id="preFlightModal" tabindex="-1" aria-labelledby="preFlightModalLabel" aria-hidden="true" data-bs-backdrop="static">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content border-0 shadow-lg">
+                <div class="modal-header bg-danger bg-opacity-10 border-bottom border-danger border-opacity-25 py-2.5">
+                    <h6 class="modal-title fw-bold text-danger d-flex align-items-center gap-2 mb-0" id="preFlightModalLabel">
+                        <i class="bi bi-exclamation-octagon-fill fs-5"></i> Pre-Flight Check Failed
+                    </h6>
+                </div>
+                <div class="modal-body p-3">
+                    <p class="mb-3 text-dark fw-semibold" style="font-size: 0.9rem;">The following files exceed the maximum allowed limits for their assigned destinations:</p>
+                    <div id="preFlightConflictsList" class="d-flex flex-column gap-2 mb-3 max-h-48 overflow-auto px-1">
+                        <!-- Injected -->
+                    </div>
+
+                    <!-- Safe Hosts Info -->
+                    <div id="preFlightSafeContainer" class="p-2 rounded border bg-success bg-opacity-10 text-success small mb-2 d-none" style="font-size: 0.74rem;">
+                        <i class="bi bi-check-circle-fill me-1"></i> <span id="preFlightSafeText">Compatible with other selected hosts.</span>
+                    </div>
+
+                    <div class="text-muted" style="font-size: 0.72rem; line-height: 1.3;">
+                        You can skip incompatible destinations, or proceed anyway if you have extended limits or wish to test.
+                    </div>
+                </div>
+                <div class="modal-footer py-2 px-3 bg-light border-top d-flex justify-content-between gap-1">
+                    <button type="button" class="btn btn-sm btn-outline-secondary py-1 px-2.5" id="preFlightCancelBtn" data-bs-dismiss="modal" style="font-size: 0.75rem;">
+                        Cancel
+                    </button>
+                    <div class="d-flex gap-2">
+                        <button type="button" class="btn btn-sm btn-outline-danger py-1 px-2.5" id="preFlightSkipBtn" data-bs-dismiss="modal" style="font-size: 0.75rem;">
+                            <i class="bi bi-skip-forward me-1"></i> Skip Incompatible
+                        </button>
+                        <button type="button" class="btn btn-sm btn-danger py-1 px-3 fw-bold" id="preFlightProceedBtn" data-bs-dismiss="modal" style="font-size: 0.75rem;">
+                            <i class="bi bi-arrow-right-circle me-1"></i> Proceed Anyway
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Multi-Host Upload Modal -->
+    <div class="modal fade" id="multiHostModal" tabindex="-1" aria-labelledby="multiHostModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content border-0 shadow">
+                <div class="modal-header bg-primary bg-opacity-10 border-bottom border-primary border-opacity-25 py-2.5">
+                    <h6 class="modal-title fw-bold text-primary d-flex align-items-center gap-2 mb-0" id="multiHostModalLabel">
+                        <i class="bi bi-layers-fill fs-5"></i> Custom Multi-Host Selection
+                    </h6>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body p-3">
+                    <p class="small text-muted mb-3" style="line-height: 1.4;">Select the specific hosts you want to use for Multi-Host uploading. Only hosts configured in your Vault are available.</p>
+                    
+                    <div id="multiHostCheckboxesContainer" class="d-flex flex-column gap-2 mb-3">
+                        <!-- Injected checkboxes -->
+                    </div>
+
+                    <div class="alert alert-light border py-2 px-2.5 small text-muted mb-0" style="font-size: 0.72rem; line-height: 1.35;">
+                        <i class="bi bi-shield-exclamation text-warning me-1"></i> <em><strong>Disclaimer:</strong> FetchStream is not affiliated with these third-party hosts and does not store or control uploaded files. You agree to adhere to each host's independent terms of service, acceptable use rules, and privacy policies. Users are strictly responsible for verifying that all uploaded files are lawful and authorized under applicable copyright laws.</em>
+                    </div>
+                </div>
+                <div class="modal-footer bg-light py-2 px-3 justify-content-between">
+                    <button type="button" class="btn btn-sm btn-outline-secondary px-3" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn btn-sm btn-primary px-4 fw-bold" id="multiHostSaveBtn">Save Selection</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- UI/UX Library for notifications -->
+    <script src="js/ui-utils.js"></script>
+    <script src="bootstrap/js/bootstrap.bundle.min.js"></script>
+    <script src="js/dialog.js"></script>
+    <script src="js/zip-builder.js"></script>
+    
+    <script src="js/service-limits.js"></script>
+    <script src="js/vault.js"></script>
+    <script src="js/options.js"></script>
+    <script src="js/uploader.js"></script>
+    <script src="js/upload.js"></script>
+</body>
+</html>
+
+
+
+
