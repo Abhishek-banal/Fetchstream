@@ -31,7 +31,7 @@ COPY start.sh .
 RUN chmod +x start.sh
 
 EXPOSE 8000
-EXPOSE 8081
+
 
 # Override the aiogram entrypoint so we can run both services
 ENTRYPOINT []
