@@ -85,14 +85,25 @@ jobs:
           TG_API_HASH: ${{ secrets.TG_API_HASH || 'eb06d4abfb49dc3eeb1aeb98ae0f581e' }}
         shell: bash
         run: |
+          
+          python3 -c '
+          import json, os
+          try:
+              creds = json.loads(os.environ.get("CREDENTIALS_JSON", "{}"))
+              for k, v in creds.items():
+                  if isinstance(v, str) and len(v) > 2:
+                      print(f"::add-mask::{v}")
+          except Exception: pass
+          '
+          
+          
           CREDS="$CREDENTIALS_JSON"
           if [ -n "$INPUT_DESC" ] && [ "$CREDS" != "null" ] && [ -n "$CREDS" ]; then
-            CREDS=$(python3 -c 'import json, os; d = json.loads(os.environ.get("CREDS") or "{}"); d["description"] = os.environ.get("INPUT_DESC"); print(json.dumps(d))')
+            export CREDENTIALS_JSON=$(python3 -c 'import json, os; d = json.loads(os.environ.get("CREDENTIALS_JSON") or "{}"); d["description"] = os.environ.get("INPUT_DESC"); print(json.dumps(d))')
           elif [ -n "$INPUT_DESC" ]; then
-            CREDS=$(python3 -c 'import json, os; print(json.dumps({"description": os.environ.get("INPUT_DESC")}))')
-          elif [ "$CREDS" = "null" ] || [ -z "$CREDS" ]; then
-            CREDS="{}"
+            export CREDENTIALS_JSON=$(python3 -c 'import json, os; print(json.dumps({"description": os.environ.get("INPUT_DESC")}))')
           fi
+          
           
           CMD_ARGS=(
             --job-id "$JOB_ID"
@@ -103,7 +114,6 @@ jobs:
             --format "$FORMAT"
             --service "$SERVICE"
             --threads "$THREADS"
-            --credentials-json "$CREDS"
             --callback-url "$CALLBACK_URL"
             --proxy-url "$PROXY_URL"
             --use-fallback "$USE_FALLBACK_PROXY"
@@ -116,4 +126,3 @@ jobs:
 
           apt-get update && apt-get install -y curl
           python server_uploader.py "${CMD_ARGS[@]}"
-
