@@ -1072,8 +1072,9 @@ def upload_telegram(file_path, file_name, creds):
 
     def get_telegram_url(method_name):
         try:
-            requests.get("http://127.0.0.1:8081", timeout=5)
-            return f"http://127.0.0.1:8081/bot{bot_token}/{method_name}"
+            # Target the service container hostname directly
+            requests.get("http://telegram-bot-api:8081", timeout=5)
+            return f"http://telegram-bot-api:8081/bot{bot_token}/{method_name}"
         except Exception as e:
             print(f"[-] Local Telegram API check failed: {e}. Falling back to public API...", flush=True)
             return f"https://api.telegram.org/bot{bot_token}/{method_name}"
@@ -1092,9 +1093,12 @@ def upload_telegram(file_path, file_name, creds):
             msg_id = data["result"]["message_id"]
             return f"https://t.me/c/{str(chat_id).replace('-100', '')}/{msg_id}"
     except Exception: pass
-    raise RuntimeError(f"Telegram Bot API error: {out}")
+    
+    
+    err_msg = out.replace(bot_token, "[REDACTED_BOT_TOKEN]") if bot_token else out
+    raise RuntimeError(f"Telegram Bot API error: {err_msg}")
 
-# ─── Orchestrator ──────────────────────────────────────────────────────────
+
 
 def normalize_service(service):
     s = (service or "").strip().lower()
@@ -1169,7 +1173,13 @@ def main():
     _global_max_file_size = float(args.max_file_size_gb)
     
     headers_dict = json.loads(args.headers_json) if args.headers_json else {}
-    creds_dict = json.loads(args.credentials_json) if args.credentials_json else {}
+    
+    # Read credentials from arguments (if available) or fallback to the injected environment variable 
+    if args.credentials_json and args.credentials_json != "{}":
+        creds_dict = json.loads(args.credentials_json)
+    else:
+        creds_dict = json.loads(os.environ.get("CREDENTIALS_JSON", "{}"))
+        
     output_path = os.path.abspath(f"temp_{args.job_id}_{args.file_name}")
 
     send_callback(args.callback_url, args.job_id, "RUNNING", stage="STARTING", progress=10)
@@ -1296,4 +1306,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
