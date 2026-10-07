@@ -78,9 +78,14 @@ class HlsParser {
         let initSegment = null;
         let totalDuration = 0;
         let currentByteOffset = 0;
+        let currentDiscontinuity = 0;
 
         for (let i = 0; i < lines.length; i++) {
             const line = lines[i];
+
+            if (line.startsWith('#EXT-X-DISCONTINUITY')) {
+                currentDiscontinuity++;
+            }
 
             if (line.startsWith('#EXT-X-KEY')) {
                 const attrs = this.parseAttributes(line);
@@ -128,7 +133,7 @@ class HlsParser {
                         currentByteOffset += length;
                         j++;
                     } else if (lookAhead.startsWith('#')) {
-                        if (lookAhead.startsWith('#EXTINF')) break;
+                        if (lookAhead.startsWith('#EXTINF') || lookAhead.startsWith('#EXT-X-DISCONTINUITY')) break;
                         j++;
                     } else if (lookAhead.length > 0) {
                         url = lookAhead;
@@ -144,7 +149,8 @@ class HlsParser {
                         duration,
                         url: this.resolveUrl(url, baseUrl),
                         key: currentKey ? { ...currentKey } : null,
-                        byteRange: byteRangeHeader
+                        byteRange: byteRangeHeader,
+                        discontinuity: currentDiscontinuity
                     });
                     i = j;
                 }
@@ -277,12 +283,39 @@ class CMAFRemuxer {
         this.aInitBuf = null;
     }
 
-    async init(vInitBuf, aInitBuf, storageAppendCallback) {
+    async init(vInitBuf, aInitBuf, storageAppendCallback, audioOnly = false) {
         this.storageAppendCallback = storageAppendCallback;
+        this.audioOnly = audioOnly;
         this.vInitBuf = vInitBuf;
         this.aInitBuf = aInitBuf;
         
-        if (vInitBuf) {
+        if (vInitBuf && this.audioOnly && !aInitBuf) {
+            aInitBuf = vInitBuf;
+        }
+
+        // Extract audio config first
+        if (aInitBuf) {
+            let aInfo = await this.extractInfo(aInitBuf);
+            if (aInfo) {
+                let validAudioTracks = aInfo.audioTracks.length > 0 ? aInfo.audioTracks : aInfo.tracks.filter(t => t.audio || (t.codec && ['mp4a', 'aac', 'opus', 'ac-3', 'ec-3'].some(c => t.codec.toLowerCase().includes(c))));
+                if (validAudioTracks.length > 0) {
+                    let track = validAudioTracks[0];
+                    let aCodec = (track.codec || '').toLowerCase();
+                    if (aCodec.startsWith('mp4a')) aCodec = 'aac';
+                    else if (aCodec.startsWith('opus')) aCodec = 'opus';
+
+                    this.audioConfig = {
+                        codec: aCodec || 'aac',
+                        numberOfChannels: (track.audio && track.audio.channel_count) ? track.audio.channel_count : 2,
+                        sampleRate: (track.audio && track.audio.sample_rate) ? track.audio.sample_rate : 48000
+                    };
+                }
+            }
+        }
+
+        // Only skip video config if audioOnly is true AND we successfully found an audio track.
+        // If we didn't find an audio track, we must keep video to prevent generating an empty 50B file.
+        if (vInitBuf && (!this.audioOnly || !this.audioConfig)) {
             let vInfo = await this.extractInfo(vInitBuf);
             if (vInfo && vInfo.videoTracks.length > 0) {
                 let track = vInfo.videoTracks[0];
@@ -299,33 +332,30 @@ class CMAFRemuxer {
                     height: track.video.height,
                     description: avcCBuffer
                 };
+                
+                if (vCodec === 'vp9' || vCodec.startsWith('vp09')) {
+                    this.videoConfig.colorSpace = {
+                        primaries: 'bt709',
+                        transfer: 'bt709',
+                        matrix: 'bt709',
+                        fullRange: false
+                    };
+                }
             }
         }
-        
-        if (aInitBuf) {
-            let aInfo = await this.extractInfo(aInitBuf);
-            if (aInfo && aInfo.audioTracks.length > 0) {
-                let track = aInfo.audioTracks[0];
-                let aCodec = (track.codec || '').toLowerCase();
-                if (aCodec.startsWith('mp4a')) aCodec = 'aac';
-                else if (aCodec.startsWith('opus')) aCodec = 'opus';
-
-                this.audioConfig = {
-                    codec: aCodec,
-                    numberOfChannels: track.audio.channel_count,
-                    sampleRate: track.audio.sample_rate
-                };
-            }
-        }
-        
+        this.appendPromises = [];
         let options = {
             target: new Mp4Muxer.StreamTarget({
                 onData: (data, position) => {
-                    this.storageAppendCallback(data);
+                    let p = this.storageAppendCallback(data);
+                    if (p && typeof p.then === 'function') {
+                        this.appendPromises.push(p);
+                    }
                 },
                 chunked: false
             }),
-            fastStart: 'fragmented'
+            fastStart: 'fragmented',
+            firstTimestampBehavior: 'offset'
         };
         
         if (this.videoConfig) options.video = this.videoConfig;
@@ -352,11 +382,16 @@ class CMAFRemuxer {
             let mp4box = MP4Box.createFile();
             mp4box.onReady = (info) => {
                 try {
-                    let avcCBox = mp4box.moov.traks[0].mdia.minf.stbl.stsd.entries[0].avcC;
-                    let stream = new DataStream();
-                    stream.endianness = DataStream.BIG_ENDIAN;
-                    avcCBox.write(stream);
-                    resolve(new Uint8Array(stream.buffer).slice(8));
+                    let entry = mp4box.moov.traks[0].mdia.minf.stbl.stsd.entries[0];
+                    let box = entry.avcC || entry.hvcC || entry.vpcC || entry.av1C;
+                    if (box) {
+                        let stream = new DataStream();
+                        stream.endianness = DataStream.BIG_ENDIAN;
+                        box.write(stream);
+                        resolve(new Uint8Array(stream.buffer).slice(8));
+                    } else {
+                        resolve(null);
+                    }
                 } catch (e) {
                     resolve(null);
                 }
@@ -368,7 +403,7 @@ class CMAFRemuxer {
         });
     }
 
-    async processVideoChunk(chunkBuf) {
+    async processVideoChunk(chunkBuf, timeOffsetSec = 0) {
         try {
             if (!this.muxer || !this.vInitBuf) return;
             let samples = await this.extractSamples(this.vInitBuf, chunkBuf, true);
@@ -376,7 +411,7 @@ class CMAFRemuxer {
                 this.muxer.addVideoChunkRaw(
                     sample.data,
                     sample.is_sync ? 'key' : 'delta',
-                    (sample.cts / sample.timescale) * 1e6,
+                    (sample.cts / sample.timescale) * 1e6 + timeOffsetSec * 1e6,
                     (sample.duration / sample.timescale) * 1e6,
                     { decoderConfig: this.videoConfig },
                     ((sample.cts - sample.dts) / sample.timescale) * 1e6
@@ -385,20 +420,23 @@ class CMAFRemuxer {
         } catch (e) { console.error("[FetchStream] Error processing video chunk:", e); }
     }
 
-    async processAudioChunk(chunkBuf) {
+    async processAudioChunk(chunkBuf, timeOffsetSec = 0) {
         try {
             if (!this.muxer || !this.aInitBuf) return;
             let samples = await this.extractSamples(this.aInitBuf, chunkBuf, false);
             for (let sample of samples) {
+                let ts = sample.timescale || (this.audioConfig ? this.audioConfig.sampleRate : 48000);
                 this.muxer.addAudioChunkRaw(
                     sample.data,
                     'key',
-                    (sample.cts / sample.timescale) * 1e6,
-                    (sample.duration / sample.timescale) * 1e6,
+                    (sample.cts / ts) * 1e6 + timeOffsetSec * 1e6,
+                    (sample.duration / ts) * 1e6,
                     { decoderConfig: this.audioConfig }
                 );
             }
-        } catch (e) { console.error("[FetchStream] Error processing audio chunk:", e); }
+        } catch (e) {
+            console.error("[FetchStream] Error processing audio chunk:", e);
+        }
     }
 
     async extractSamples(initBuf, chunkBuf, isVideo) {
@@ -408,8 +446,11 @@ class CMAFRemuxer {
             let targetTrackId = null;
             
             mp4box.onReady = (info) => {
-                let tracks = isVideo ? info.videoTracks : info.audioTracks;
-                if (tracks.length > 0) targetTrackId = tracks[0].id;
+                let tracks = isVideo 
+                    ? (info.videoTracks.length > 0 ? info.videoTracks : info.tracks.filter(t => t.video || (t.codec && ['avc', 'hvc', 'hev', 'vp9', 'vp09', 'av01'].some(c => t.codec.toLowerCase().includes(c)))))
+                    : (info.audioTracks.length > 0 ? info.audioTracks : info.tracks.filter(t => t.audio || (t.codec && ['mp4a', 'aac', 'opus', 'ac-3', 'ec-3'].some(c => t.codec.toLowerCase().includes(c)))));
+                
+                if (tracks && tracks.length > 0) targetTrackId = tracks[0].id;
                 
                 if (targetTrackId) {
                     mp4box.setExtractionOptions(targetTrackId);
@@ -422,6 +463,8 @@ class CMAFRemuxer {
             mp4box.onSamples = (id, user, samples) => {
                 allSamples = allSamples.concat(samples);
             };
+            
+            mp4box.onError = () => resolve([]);
             
             let ib = initBuf.slice(0);
             ib.fileStart = 0;
@@ -529,12 +572,10 @@ class DownloadTask {
     }
 
     getMimeType() {
-        const fmt = (this.format || '').toLowerCase();
         const ext = (this.name ? this.name.split('.').pop() : '').toLowerCase();
-        const target = fmt || ext;
 
-        if (this.type === 'hls' || fmt === 'm3u8') {
-            return target === 'mp3' ? 'audio/mpeg' : (target === 'm4a' ? 'audio/mp4' : 'video/mp4');
+        if (this.type === 'hls' || this.format === 'm3u8') {
+            return ext === 'mp3' ? 'audio/mpeg' : (ext === 'm4a' ? 'application/octet-stream' : 'video/mp4');
         }
 
         const mimeMap = {
@@ -829,8 +870,8 @@ class DownloadTask {
         let audioSegments = [];
         let audioInitSegmentUrl = null;
 
-        if (this.audioOnly && (this.variantUrl || parsed.audioUrl)) {
-            const aUrl = this.variantUrl || parsed.audioUrl;
+        if (this.audioOnly) {
+            const aUrl = parsed.audioUrl || this.variantUrl || this.url;
             const audioRes = await this.fetchWithHeaders(aUrl, this.headers);
             if (!audioRes.ok) throw new Error(`HTTP ${audioRes.status}: Failed to load audio track`);
             const audioText = await audioRes.text();
@@ -878,53 +919,46 @@ class DownloadTask {
         }
 
         const isCmaf = (initSegmentUrl != null) || (mediaSegments.length > 0 && (mediaSegments[0].url.includes('.m4s') || mediaSegments[0].url.includes('.mp4')));
-        const useMuxjs = typeof muxjs !== 'undefined' && !isCmaf;
-        const useCmafRemuxer = typeof MP4Box !== 'undefined' && audioSegments.length > 0 && isCmaf;
-
-        let transmuxer = null;
-        if (useMuxjs) {
-            transmuxer = new muxjs.mp4.Transmuxer();
-            let initAppended = false;
-            transmuxer.on('data', async (segment) => {
-                if (segment.initSegment && !initAppended) {
-                    await this.storage.append(segment.initSegment.buffer);
-                    initAppended = true;
-                }
-                if (segment.data) {
-                    await this.storage.append(segment.data.buffer);
-                }
-            });
+        const isTs = !isCmaf;
+        
+        let cmafRemuxer = null;
+        if (typeof MP4Box !== 'undefined' && typeof Mp4Muxer !== 'undefined') {
+            cmafRemuxer = new CMAFRemuxer();
         }
 
-        let cmafRemuxer = null;
-        if (useCmafRemuxer) {
-            cmafRemuxer = new CMAFRemuxer();
+        let tsTransmuxer = null;
+        if (isTs && typeof muxjs !== 'undefined') {
+            // keepOriginalTimestamps: true ensures mux.js doesn't do any broken math on the PTS.
+            // We handle the offset mathematically inside CMAFRemuxer later!
+            tsTransmuxer = new muxjs.mp4.Transmuxer({ keepOriginalTimestamps: true });
+        }
+
+        let cmafInitialized = false;
+
+        if (isCmaf && cmafRemuxer) {
             try {
-                let vInitBuf = await this.fetchSegmentWithRetry(initSegmentUrl.url, null, this.headers, initSegmentUrl.byteRange);
+                let vInitBuf = initSegmentUrl ? await this.fetchSegmentWithRetry(initSegmentUrl.url, null, this.headers, initSegmentUrl.byteRange) : null;
                 let aInitBuf = audioInitSegmentUrl ? await this.fetchSegmentWithRetry(audioInitSegmentUrl.url, null, this.headers, audioInitSegmentUrl.byteRange) : null;
                 
-                let success = await cmafRemuxer.init(vInitBuf, aInitBuf, async (buffer) => {
-                    await this.storage.append(buffer);
-                    this.totalSize += buffer.byteLength;
-                });
-                
-                if (!success) {
-                    console.error("[FetchStream] Failed to initialize CMAF remuxer");
+                if (this.audioOnly && vInitBuf && !aInitBuf) {
+                    aInitBuf = vInitBuf;
+                    vInitBuf = null;
                 }
-            } catch (err) { console.error("[FetchStream] CMAF Remuxer init error:", err); }
-        } else if (initSegmentUrl && !useMuxjs) {
-            try {
-                const initBuffer = await this.fetchSegmentWithRetry(initSegmentUrl.url, null, this.headers, initSegmentUrl.byteRange);
-                if (initBuffer) {
-                    await this.storage.append(initBuffer);
-                    this.totalSize += initBuffer.byteLength;
+
+                if (vInitBuf || aInitBuf) {
+                    let success = await cmafRemuxer.init(vInitBuf, aInitBuf, async (buffer) => {
+                        if (this.storage) await this.storage.append(buffer);
+                        this.totalSize += buffer.byteLength;
+                    }, this.audioOnly);
+                    if (success) cmafInitialized = true;
                 }
-            } catch (err) { }
+            } catch (err) { console.error("[FetchStream] CMAF Init error:", err); }
         }
 
         const total = mediaSegments.length;
         const totalAudio = audioSegments.length;
-        const totalTasks = total + (useMuxjs || useCmafRemuxer ? totalAudio : 0);
+        const hasAudioTrack = totalAudio > 0;
+        const totalTasks = total + (hasAudioTrack ? totalAudio : 0);
         this.totalSegments = totalTasks;
         this.completedSegments = 0;
         this.segmentMap = {};
@@ -971,17 +1005,30 @@ class DownloadTask {
             let nextAudioFlushIndex = 0;
             let currentVideoTime = 0;
             let currentAudioTime = 0;
+            let activeDiscontinuity = 0;
+            let ptsOffsetVideo = 0;
+            let ptsOffsetAudio = 0;
+            let fmp4InitCaptured = null;
+            let fmp4DataCaptured = [];
+            
+            const setupTsTransmuxer = () => {
+                tsTransmuxer = new muxjs.mp4.Transmuxer({ keepOriginalTimestamps: true });
+                tsTransmuxer.on('data', (segment) => {
+                    if (segment.initSegment) fmp4InitCaptured = segment.initSegment;
+                    if (segment.data) fmp4DataCaptured.push(segment.data);
+                });
+            };
+            
+            if (isTs && typeof muxjs !== 'undefined') {
+                setupTsTransmuxer();
+            }
             
             while (nextFlushIndex < total && this.state !== 'CANCELLED') {
                 const hasV = nextFlushIndex in this.segmentMap;
                 
-                // Determine if we are waiting for audio before proceeding
                 let hasA = true;
-                if (useMuxjs) {
-                    hasA = (nextFlushIndex < totalAudio) ? (nextFlushIndex in this.audioMap) : true;
-                } else if (useCmafRemuxer) {
+                if (hasAudioTrack) {
                     const vDuration = mediaSegments[nextFlushIndex]?.duration || 0;
-                    // We only require the next audio chunk if its timestamp is <= video timestamp
                     if (nextAudioFlushIndex < totalAudio && currentAudioTime <= currentVideoTime + vDuration) {
                         hasA = (nextAudioFlushIndex in this.audioMap);
                     }
@@ -989,47 +1036,105 @@ class DownloadTask {
 
                 if (hasV && hasA) {
                     let vBuf = this.segmentMap[nextFlushIndex];
-                    const vDuration = mediaSegments[nextFlushIndex]?.duration || 0;
+                    const vSegment = mediaSegments[nextFlushIndex];
+                    const vDuration = vSegment?.duration || 0;
+                    const segDiscontinuity = vSegment?.discontinuity || 0;
                     
-                    if (useMuxjs && vBuf && vBuf.byteLength > 0) {
-                        transmuxer.push(new Uint8Array(vBuf));
-                    } else if (vBuf && vBuf.byteLength > 0) {
-                        if (useCmafRemuxer) {
-                            await cmafRemuxer.processVideoChunk(vBuf);
-                        } else {
-                            await this.storage.append(vBuf);
-                        }
+                    if (segDiscontinuity !== activeDiscontinuity) {
+                        activeDiscontinuity = segDiscontinuity;
+                        ptsOffsetVideo = currentVideoTime;
+                        ptsOffsetAudio = currentAudioTime;
+                        if (isTs) setupTsTransmuxer();
                     }
-                    delete this.segmentMap[nextFlushIndex];
-                    
-                    if (useMuxjs && nextFlushIndex in this.audioMap) {
-                        const aBuf = this.audioMap[nextFlushIndex];
-                        if (aBuf && aBuf.byteLength > 0) {
-                            transmuxer.push(new Uint8Array(aBuf));
-                        }
-                        delete this.audioMap[nextFlushIndex];
-                    } else if (useCmafRemuxer) {
-                        while (nextAudioFlushIndex < totalAudio && currentAudioTime <= currentVideoTime + vDuration) {
-                            if (nextAudioFlushIndex in this.audioMap) {
-                                let aBuf = this.audioMap[nextAudioFlushIndex];
-                                if (aBuf && aBuf.byteLength > 0) {
-                                    await cmafRemuxer.processAudioChunk(aBuf);
+
+                    if (cmafRemuxer) {
+                        if (isTs && tsTransmuxer) {
+                            fmp4DataCaptured = [];
+                            let pushedAnything = false;
+                            if (vBuf && vBuf.byteLength > 0) {
+                                tsTransmuxer.push(new Uint8Array(vBuf));
+                                pushedAnything = true;
+                            }
+                            
+                            let processedAudioDuration = 0;
+                            while (hasAudioTrack && nextAudioFlushIndex < totalAudio && currentAudioTime + processedAudioDuration <= currentVideoTime + vDuration) {
+                                if (nextAudioFlushIndex in this.audioMap) {
+                                    let aBuf = this.audioMap[nextAudioFlushIndex];
+                                    if (aBuf && aBuf.byteLength > 0) {
+                                        tsTransmuxer.push(new Uint8Array(aBuf));
+                                        pushedAnything = true;
+                                    }
+                                    delete this.audioMap[nextAudioFlushIndex];
+                                    processedAudioDuration += (audioSegments[nextAudioFlushIndex].duration || 0);
+                                    nextAudioFlushIndex++;
+                                } else {
+                                    break;
                                 }
-                                delete this.audioMap[nextAudioFlushIndex];
-                                const aSeg = audioSegments[nextAudioFlushIndex];
-                                currentAudioTime += (aSeg.duration || 0);
-                                nextAudioFlushIndex++;
-                            } else {
-                                break;
+                            }
+                            
+                            if (pushedAnything) {
+                                tsTransmuxer.flush();
+                            }
+                            
+                            if (fmp4InitCaptured && !cmafInitialized) {
+                                // .slice().buffer ensures exactly sized ArrayBuffer for MP4Box
+                                let initBuf = fmp4InitCaptured.slice().buffer;
+                                let success = await cmafRemuxer.init(initBuf, initBuf, async (buffer) => {
+                                    if (this.storage) await this.storage.append(buffer);
+                                }, this.audioOnly);
+                                if (success) cmafInitialized = true;
+                                fmp4InitCaptured = null;
+                            }
+                            
+                            if (cmafInitialized) {
+                                for (let fmp4Chunk of fmp4DataCaptured) {
+                                    let chunkBuf = fmp4Chunk.slice().buffer;
+                                    // Only skip video if we actually have an audio track config to mux!
+                                    if (!this.audioOnly || !cmafRemuxer.audioConfig) {
+                                        await cmafRemuxer.processVideoChunk(chunkBuf, ptsOffsetVideo);
+                                    }
+                                    if (hasAudioTrack || cmafRemuxer.audioConfig || this.audioOnly) {
+                                        await cmafRemuxer.processAudioChunk(chunkBuf, hasAudioTrack ? ptsOffsetAudio : ptsOffsetVideo);
+                                    }
+                                }
+                            }
+                            currentAudioTime += processedAudioDuration;
+                            
+                        } else {
+                            // Direct CMAF Pipeline (.m4s chunks)
+                            if (cmafInitialized && vBuf && vBuf.byteLength > 0) {
+                                // Only skip video if we actually have an audio track config to mux!
+                                if (!this.audioOnly || !cmafRemuxer.audioConfig) {
+                                    await cmafRemuxer.processVideoChunk(vBuf, ptsOffsetVideo);
+                                }
+                                // If it's an interleaved CMAF stream with no separate audio track, extract audio from vBuf
+                                if (this.audioOnly && !hasAudioTrack) {
+                                    await cmafRemuxer.processAudioChunk(vBuf, ptsOffsetVideo);
+                                }
+                            }
+                            
+                            while (hasAudioTrack && nextAudioFlushIndex < totalAudio && currentAudioTime <= currentVideoTime + vDuration) {
+                                if (nextAudioFlushIndex in this.audioMap) {
+                                    let aBuf = this.audioMap[nextAudioFlushIndex];
+                                    if (cmafInitialized && aBuf && aBuf.byteLength > 0) {
+                                        await cmafRemuxer.processAudioChunk(aBuf, ptsOffsetAudio);
+                                    }
+                                    delete this.audioMap[nextAudioFlushIndex];
+                                    currentAudioTime += (audioSegments[nextAudioFlushIndex].duration || 0);
+                                    nextAudioFlushIndex++;
+                                } else {
+                                    break;
+                                }
                             }
                         }
+                    } else {
+                        // Fallback: Just binary append if muxers fail to load
+                        if (vBuf && vBuf.byteLength > 0) await this.storage.append(vBuf);
+                        // We skip audio in fallback since we can't multiplex it without RAM
                     }
                     
+                    delete this.segmentMap[nextFlushIndex];
                     currentVideoTime += vDuration;
-                    
-                    if (useMuxjs) {
-                        transmuxer.flush();
-                    }
                     nextFlushIndex++;
                 } else {
                     await new Promise(r => setTimeout(r, 50));
@@ -1041,15 +1146,18 @@ class DownloadTask {
         const workers = [];
         for (let i = 0; i < poolSize; i++) {
             workers.push(worker(false)); // Video workers
-            if (useMuxjs || useCmafRemuxer) workers.push(worker(true)); // Audio workers
+            if (hasAudioTrack) workers.push(worker(true)); // Audio workers
         }
         const flushPromise = flusher();
 
         await Promise.all(workers);
         await flushPromise;
         
-        if (useCmafRemuxer && cmafRemuxer && cmafRemuxer.muxer) {
+        if (cmafRemuxer && cmafRemuxer.muxer) {
             cmafRemuxer.muxer.finalize();
+            if (cmafRemuxer.appendPromises) {
+                await Promise.all(cmafRemuxer.appendPromises);
+            }
         }
 
         if (this.state === 'CANCELLED') return;

@@ -386,7 +386,7 @@ def download_hls_parallel(media_url, headers_dict, output_path, callback_url, jo
                             audio_url = urljoin_keep_query(effective_url, uri_match.group(1))
                             break
 
-        if variant_url and not audio_only:
+        if variant_url and (not audio_only or not audio_url):
             v_resp = None
             for v_attempt in range(3):
                 try:

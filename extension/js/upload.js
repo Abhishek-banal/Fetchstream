@@ -239,17 +239,7 @@ document.addEventListener('DOMContentLoaded', () => {
                                 variantSelect.appendChild(opt);
                             });
                             variantsContainer.classList.remove('d-none');
-                            
-                            if (watchBtn) {
-                                watchBtn.onclick = (e) => { 
-                                    e.preventDefault(); 
-                                    let pUrl = `player.html?url=${encodeURIComponent(url)}`;
-                                    if (variantSelect && variantSelect.value) {
-                                        pUrl += `&variant=${encodeURIComponent(variantSelect.value)}`;
-                                    }
-                                    chrome.tabs.create({ url: pUrl }); 
-                                };
-                            }
+                            variantsContainer.classList.remove('d-none');
                         } else if (variantsContainer) {
                             variantsContainer.classList.add('d-none');
                         }
@@ -270,6 +260,20 @@ document.addEventListener('DOMContentLoaded', () => {
         serverUrlInput.addEventListener('blur', () => fetchFilenameForUrl(serverUrlInput.value.trim()));
         serverUrlInput.addEventListener('paste', () => {
             setTimeout(() => fetchFilenameForUrl(serverUrlInput.value.trim()), 100);
+        });
+    }
+
+    const urlUploadAudioOnlyCheckbox = document.getElementById('urlUploadAudioOnlyCheckbox');
+    const urlUploadVariantSelect = document.getElementById('urlUploadVariantSelect');
+    if (urlUploadAudioOnlyCheckbox && urlUploadVariantSelect) {
+        urlUploadAudioOnlyCheckbox.addEventListener('change', () => {
+            if (urlUploadAudioOnlyCheckbox.checked) {
+                urlUploadVariantSelect.disabled = true;
+                urlUploadVariantSelect.style.opacity = "0.5";
+            } else {
+                urlUploadVariantSelect.disabled = false;
+                urlUploadVariantSelect.style.opacity = "1";
+            }
         });
     }
 
@@ -555,7 +559,16 @@ document.addEventListener('DOMContentLoaded', () => {
         if (captionInput && captionInput.closest('.telegram-caption-row') && !captionInput.closest('.telegram-caption-row').classList.contains('d-none')) {
             telegramCaption = captionInput.value.trim();
         }
-        return { url, variantUrl, resolution, isM3u8, fileName, service, reqHeaders, telegramCaption };
+        const audioOnlyCheckbox = document.getElementById('urlUploadAudioOnlyCheckbox');
+        const audioOnly = audioOnlyCheckbox ? audioOnlyCheckbox.checked : false;
+
+        if (audioOnly && fileName.toLowerCase().endsWith(".mp4")) {
+            fileName = fileName.substring(0, fileName.lastIndexOf(".")) + ".m4a";
+        } else if (audioOnly && !fileName.toLowerCase().endsWith(".m4a")) {
+            fileName += ".m4a";
+        }
+        
+        return { url, variantUrl, resolution, isM3u8, fileName, service, reqHeaders, telegramCaption, audioOnly };
     }
 
     function addDownloadTask(details, isUpload) {
@@ -573,10 +586,28 @@ document.addEventListener('DOMContentLoaded', () => {
             uploadService: isUpload ? details.service : null,
             telegramCaption: details.telegramCaption || "",
             type: details.isM3u8 ? "hls" : "direct",
+            audioOnly: details.audioOnly,
             preFlightConfirmed: true
         };
         chrome.storage.local.set({ [dlId]: dlData, dl_queue: dlData }, () => {
             window.location.href = "downloader.html?id=" + dlId;
+        });
+    }
+
+    const urlUploadWatchBtn = document.getElementById('urlUploadWatchBtn');
+    if (urlUploadWatchBtn) {
+        urlUploadWatchBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            const details = getUrlUploadDetails();
+            if (!details) return CustomDialog.show({title: 'Error', message: 'Please enter a valid URL', type: 'danger'});
+            let pUrl = `player.html?url=${encodeURIComponent(details.url)}`;
+            if (details.variantUrl && details.variantUrl !== details.url) {
+                pUrl += `&variant=${encodeURIComponent(details.variantUrl)}`;
+            }
+            if (details.audioOnly) {
+                pUrl += `&audioOnly=true`;
+            }
+            chrome.tabs.create({ url: pUrl });
         });
     }
 
@@ -654,6 +685,15 @@ document.addEventListener('DOMContentLoaded', () => {
                     payloadCreds.telegram = { ...(payloadCreds.telegram || {}), caption: telegramCaption };
                 }
 
+                const audioOnlyCheckbox = document.getElementById('urlUploadAudioOnlyCheckbox');
+                const audioOnly = audioOnlyCheckbox ? audioOnlyCheckbox.checked : false;
+
+                if (audioOnly && fileName.toLowerCase().endsWith(".mp4")) {
+                    fileName = fileName.substring(0, fileName.lastIndexOf(".")) + ".m4a";
+                } else if (audioOnly && !fileName.toLowerCase().endsWith(".m4a")) {
+                    fileName += ".m4a";
+                }
+
                 chrome.runtime.sendMessage({
                     action: 'ACTION_START_SERVER_UPLOAD',
                     payload: {
@@ -664,7 +704,8 @@ document.addEventListener('DOMContentLoaded', () => {
                         service: service,
                         resolution: resolution,
                         credentials: payloadCreds,
-                        telegramCaption: telegramCaption
+                        telegramCaption: telegramCaption,
+                        audioOnly: audioOnly
                     }
                 }, (response) => {
                     if (chrome.runtime.lastError || (response && !response.success)) {

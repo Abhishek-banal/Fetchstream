@@ -3,11 +3,15 @@ async function sweepOrphanedOpfs() {
     try {
         const root = await navigator.storage.getDirectory();
         let deleted = 0;
+        const toDelete = [];
         for await (const [name, handle] of root.entries()) {
             if (name.startsWith('fs_zip_') || name.startsWith('fs_dl_') || name.startsWith('fs_turbo_')) {
-                await root.removeEntry(name, { recursive: true }).catch(()=>{});
-                deleted++;
+                toDelete.push(name);
             }
+        }
+        for (const name of toDelete) {
+            await root.removeEntry(name, { recursive: true }).catch(()=>{});
+            deleted++;
         }
     } catch(e) {
         console.error('[FetchStream GC] OPFS sweep failed:', e);
@@ -63,6 +67,7 @@ const activeDownloads = {};
 const activeUploads = {};
 const activeServerUploads = {};
 const tabUrls = {};
+const tabTitles = {};
 
 const storageWriteQueue = new Map();
 const debouncedStorageSet = (storageKey, data) => {
@@ -1203,6 +1208,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   delete tabUrls[tabId];
+  delete tabTitles[tabId];
   removeSessionRulesForTab(tabId);
   const key = `storage${tabId}`;
   
@@ -1243,9 +1249,9 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 });
 
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
-  if (changeInfo.url) {
-    tabUrls[tabId] = changeInfo.url;
-  }
+  if (changeInfo.url) tabUrls[tabId] = changeInfo.url;
+  if (changeInfo.title) tabTitles[tabId] = changeInfo.title;
+  else if (tab.title) tabTitles[tabId] = tab.title;
 
   if (changeInfo.status === "loading" && changeInfo.url) {
     try {
@@ -1590,11 +1596,16 @@ chrome.webRequest.onResponseStarted.addListener(
       }
     }
     
-    if (tabId && tabId !== -1 && !tabUrls[tabId]) {
-      try {
-        const t = await chrome.tabs.get(tabId);
-        if (t && t.url) tabUrls[tabId] = t.url;
-      } catch {}
+    if (tabId && tabId !== -1) {
+      if (!tabUrls[tabId] || !tabTitles[tabId]) {
+        try {
+          const t = await chrome.tabs.get(tabId);
+          if (t) {
+            if (t.url) tabUrls[tabId] = t.url;
+            if (t.title) tabTitles[tabId] = t.title;
+          }
+        } catch {}
+      }
     }
 
     if (!tabId || tabId === -1) return;
@@ -1605,7 +1616,6 @@ chrome.webRequest.onResponseStarted.addListener(
       const hostname = new URL(url).hostname;
       if (isDomainBlocked(hostname)) return;
 
-      // Drop requests initiated from or living inside restricted tabs
       if (initiator) {
         const initHost = new URL(initiator).hostname;
         if (isDomainBlocked(initHost)) return;
@@ -1692,8 +1702,23 @@ chrome.webRequest.onResponseStarted.addListener(
       return name;
     })(details);
 
-    if (!filename) {
-      filename = isHls ? "stream.m3u8" : "media.mp4";
+    let isGeneric = false;
+    if (!filename) isGeneric = true;
+    else {
+      const nameL = filename.toLowerCase();
+      if (nameL.includes("m3u8") || nameL.includes("playlist") || nameL.includes("index") || nameL.includes("master") || nameL.includes("stream") || nameL.match(/^[0-9a-f]{8,}/)) {
+        isGeneric = true;
+      }
+    }
+
+    if (isGeneric && tabId && tabTitles[tabId]) {
+      let cleanTitle = tabTitles[tabId].replace(/[\\/:*?"<>|]/g, " ").trim();
+      if (cleanTitle.length > 60) cleanTitle = cleanTitle.substring(0, 60).trim();
+      if (cleanTitle.length > 0) filename = cleanTitle;
+    }
+
+    if (!filename || filename.trim() === "") {
+      filename = isHls ? "stream" : "media";
     }
 
     let format = null;
@@ -1800,8 +1825,9 @@ chrome.webRequest.onResponseStarted.addListener(
       delete tabStorage[oldestKey];
     }
 
+    const urlBase = url.split('?')[0];
     for (const key in tabStorage) {
-      if (tabStorage[key].url === url) {
+      if (tabStorage[key].url.split('?')[0] === urlBase) {
         updateBadge(tabStorage, tabId);
         return;
       }

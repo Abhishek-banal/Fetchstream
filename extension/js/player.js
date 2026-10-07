@@ -1,6 +1,6 @@
 const params = new URLSearchParams(window.location.search);
 const url = params.get('url');
-const video = document.getElementById('video');
+let mediaElement = document.getElementById('video');
 const errorEl = document.getElementById('error');
 
 if (!url || !isSafeHttpUrl(url)) {
@@ -10,10 +10,18 @@ if (!url || !isSafeHttpUrl(url)) {
     document.title = "Playing: " + url.split('/').pop();
     const isAudioOnly = params.get('audioOnly') === 'true';
     if (isAudioOnly) {
-        video.style.height = '60px';
-        video.style.background = '#111';
+        const audioEl = document.createElement('audio');
+        audioEl.id = 'video';
+        audioEl.controls = true;
+        audioEl.autoplay = true;
+        audioEl.style.width = '100%';
+        audioEl.style.outline = 'none';
+        mediaElement.replaceWith(audioEl);
+        mediaElement = audioEl;
+
         document.body.style.display = 'flex';
         document.body.style.alignItems = 'center';
+        document.body.style.background = '#000';
     }
     
     if (url.includes('.m3u8')) {
@@ -39,12 +47,8 @@ if (!url || !isSafeHttpUrl(url)) {
                 });
             }
 
-            if (isAudioOnly && safeVariant) {
-                hls.loadSource(safeVariant);
-            } else {
-                hls.loadSource(url);
-            }
-            hls.attachMedia(video);
+            hls.loadSource(url);
+            hls.attachMedia(mediaElement);
             hls.on(Hls.Events.ERROR, function (event, data) {
                 if (data.fatal) {
                     switch (data.type) {
@@ -60,13 +64,13 @@ if (!url || !isSafeHttpUrl(url)) {
                     }
                 }
             });
-        } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-            video.src = url;
+        } else if (mediaElement.canPlayType('application/vnd.apple.mpegurl')) {
+            mediaElement.src = url;
         } else {
             errorEl.innerText = "HLS is not supported in this browser.";
             errorEl.style.display = 'block';
         }
     } else {
-        video.src = url;
+        mediaElement.src = url;
     }
 }

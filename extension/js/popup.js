@@ -82,7 +82,7 @@ class PopupManager {
         this.$serverUrlInputPopup = this.selector("serverUrlInputPopup");
         this.$urlUploadServiceSelectText = this.selector("urlUploadServiceSelectText");
         this.$urlUploadDropdownMenu = this.selector("urlUploadDropdownMenu");
-        this.$serverUrlSubmitBtnPopup = this.selector("serverUrlSubmitBtnPopup"); this.$urlDownloadLocalBtnPopup = this.selector("urlDownloadLocalBtnPopup"); this.$urlUploadLocalBtnPopup = this.selector("urlUploadLocalBtnPopup");
+        this.$serverUrlSubmitBtnPopup = this.selector("serverUrlSubmitBtnPopup"); this.$urlDownloadLocalBtnPopup = this.selector("urlDownloadLocalBtnPopup"); this.$urlUploadLocalBtnPopup = this.selector("urlUploadLocalBtnPopup"); this.$urlUploadWatchBtnPopup = this.selector("urlUploadWatchBtn");
         this.$serverUploadStateBadge = this.selector("serverUploadStateBadge");
         this.$refreshPageBtn = this.selector("refreshPageBtn");
         this.$toggleScanBtn = this.selector("toggleScanBtn");
@@ -1886,16 +1886,19 @@ class PopupManager {
     }
 
     player(details, container, resolutionElement, onResolutionFound = null) {
-        const video = document.createElement("video");
+        let video = document.createElement(details.audioOnly ? "audio" : "video");
         video.autoplay = true;
         video.controls = true;
         video.style.maxWidth = "100%";
-        video.style.maxHeight = "240px";
-        container.appendChild(video);
+        video.style.outline = "none";
+        
         if (details.audioOnly) {
-            video.style.height = "54px";
-            video.style.background = "#000";
+            video.style.width = '100%';
+        } else {
+            video.style.maxHeight = "240px";
         }
+        
+        container.appendChild(video);
 
         let detectedCodec = "";
 
@@ -1991,14 +1994,16 @@ class PopupManager {
                 if (rules) this.removeRules();
             });
 
+            let hlsSrc = details.url;
+
             if (rules) {
                 domains.push(this.getTopLevelDomain(details.url));
                 this.setRules(rules, domains).then(() => {
-                    hls.loadSource(details.audioOnly && details.selectedVariantUrl ? details.selectedVariantUrl : details.url);
+                    hls.loadSource(hlsSrc);
                     hls.attachMedia(video);
                 });
             } else {
-                hls.loadSource(details.audioOnly && details.selectedVariantUrl ? details.selectedVariantUrl : details.url);
+                hls.loadSource(hlsSrc);
                 hls.attachMedia(video);
             }
             return hls;
@@ -2055,7 +2060,11 @@ class PopupManager {
             if (fileName.toLowerCase().endsWith(".m3u8") || fileName.toLowerCase().endsWith(".m3u")) {
                 fileName = fileName.replace(/\.m3u8?$/i, targetExt);
             } else if (!fileName.toLowerCase().endsWith(targetExt)) {
-                fileName = `${fileName}${targetExt}`;
+                if (fileName.toLowerCase().endsWith(".mp4") && targetExt === ".m4a") {
+                    fileName = fileName.substring(0, fileName.lastIndexOf(".")) + targetExt;
+                } else {
+                    fileName = `${fileName}${targetExt}`;
+                }
             }
         } else {
             const dotIdx = fileName.lastIndexOf(".");
@@ -2099,13 +2108,18 @@ class PopupManager {
         if (details.type === "hls" || action === "upload") {
             const dlId = `dl_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
 
+            let targetVariant = details.selectedVariantUrl;
+            if (details.audioOnly && details.audioUrl) {
+                targetVariant = details.audioUrl;
+            }
+
             const dlData = {
                 ...details,
                 id: dlId,
                 name: fileName,
                 url: targetUrl,
                 selectedUrl: targetUrl,
-                variantUrl: details.selectedVariantUrl,
+                variantUrl: targetVariant,
                 resolution: details.resolution || details.selectedResolution || null,
                 action: action,
                 uploadService: action === "upload" ? uploadService : null,
@@ -2217,6 +2231,7 @@ class PopupManager {
         const $renameBtn = this.selector("rename-btn", false, $item);
         const $size = this.selector("size", false, $item);
         const $qualitySelect = this.selector("quality-select", false, $item);
+        const $audioOnlyCheckbox = this.selector("audio-only-checkbox", false, $item);
         const $resBadge = this.selector("res-badge", false, $item);
         const $urlToggle = this.selector("url-toggle", false, $item);
         const $downloadBtn = this.selector("download", false, $item);
@@ -2663,6 +2678,23 @@ class PopupManager {
             };
         }
 
+        if ($audioOnlyCheckbox && $qualitySelect) {
+            $audioOnlyCheckbox.addEventListener('change', () => {
+                if ($audioOnlyCheckbox.checked) {
+                    $qualitySelect.disabled = true;
+                    $qualitySelect.style.opacity = "0.5";
+                } else {
+                    $qualitySelect.disabled = false;
+                    $qualitySelect.style.opacity = "1";
+                }
+            });
+            // trigger on load just in case
+            if ($audioOnlyCheckbox.checked) {
+                $qualitySelect.disabled = true;
+                $qualitySelect.style.opacity = "0.5";
+            }
+        }
+
         $urlClose.onclick = () => collapseUrl.hide();
         $playerClose.onclick = () => collapsePlayer.hide();
 
@@ -2686,6 +2718,7 @@ class PopupManager {
 
         $playBtn.onclick = () => {
             collapseUrl.hide();
+            itemData.audioOnly = $audioOnlyCheckbox ? $audioOnlyCheckbox.checked : false;
             if (category === "videos" || category === "audio") {
                 if (!$playerCollapse.classList.contains("show")) {
                     playerInstance = this.player(itemData, $playerContainer, $resolution, (resLabel) => {
@@ -2717,8 +2750,9 @@ class PopupManager {
 
         if ($openNewTabBtn) {
             $openNewTabBtn.onclick = () => {
+                itemData.audioOnly = $audioOnlyCheckbox ? $audioOnlyCheckbox.checked : false;
                 const targetUrl = itemData.url;
-                const variantUrl = itemData.selectedVariantUrl;
+                let variantUrl = itemData.selectedVariantUrl;
                 if (targetUrl) {
                     let playerUrl = chrome.runtime.getURL('player.html') + '?url=' + encodeURIComponent(targetUrl);
                     if (variantUrl && variantUrl !== targetUrl) {
@@ -2734,6 +2768,7 @@ class PopupManager {
 
         $downloadBtn.onclick = () => {
             itemData.name = getFullName();
+            itemData.audioOnly = $audioOnlyCheckbox ? $audioOnlyCheckbox.checked : false;
             if ($captionInput) itemData.telegramCaption = $captionInput.value.trim();
             if (itemData.isProtectedPdf) {
                 this.extractPdfFromPage();
@@ -2818,6 +2853,7 @@ class PopupManager {
         if ($uploadBtn) {
             $uploadBtn.onclick = async () => {
                 itemData.name = getFullName();
+                itemData.audioOnly = $audioOnlyCheckbox ? $audioOnlyCheckbox.checked : false;
                 if ($captionInput) itemData.telegramCaption = $captionInput.value.trim();
                 let svc = itemData.uploadService || this.options.serverUpload?.service || "gofile.io";
                 if (svc === "custom") {
@@ -2842,6 +2878,7 @@ class PopupManager {
             $serverUploadBtn.onclick = async () => {
                 try {
                     itemData.name = getFullName();
+                    itemData.audioOnly = $audioOnlyCheckbox ? $audioOnlyCheckbox.checked : false;
                     if ($captionInput) itemData.telegramCaption = $captionInput.value.trim();
                     let svc = itemData.uploadService || this.options.serverUpload?.service || "gofile.io";
                     if (svc === "custom") {
@@ -4738,7 +4775,11 @@ class PopupManager {
             if (!proceed) return;
             try {
                 const root = await navigator.storage.getDirectory();
+                const toDelete = [];
                 for await (const [name, handle] of root.entries()) {
+                    toDelete.push(name);
+                }
+                for (const name of toDelete) {
                     await root.removeEntry(name, { recursive: true }).catch(()=>{});
                 }
                 this.toast("Temporary storage cleared successfully!", false);
@@ -4818,7 +4859,7 @@ class PopupManager {
         if (this.$urlUploadDropdownMenu && this.$urlUploadServiceSelectText) {
             const targetBtn = this.$urlUploadDropdownMenu.querySelector(`.dropdown-item[data-service="${selectedUrlUploadServicePopup}"]`);
             if (targetBtn) {
-                this.$urlUploadServiceSelectText.innerHTML = window.escapeHTML(targetBtn.innerHTML);
+                this.$urlUploadServiceSelectText.innerHTML = targetBtn.innerHTML;
             }
         }
         
@@ -4993,17 +5034,6 @@ class PopupManager {
                                     variantSelect.appendChild(opt);
                                 });
                                 variantsContainer.classList.remove('d-none');
-                                
-                                if (watchBtn) {
-                                    watchBtn.onclick = (e) => {
-                                        e.preventDefault();
-                                        let pUrl = `player.html?url=${encodeURIComponent(url)}`;
-                                        if (variantSelect && variantSelect.value) {
-                                            pUrl += `&variant=${encodeURIComponent(variantSelect.value)}`;
-                                        }
-                                        chrome.tabs.create({ url: pUrl });
-                                    };
-                                }
                             } else if (variantsContainer) {
                                 variantsContainer.classList.add('d-none');
                             }
@@ -5060,6 +5090,9 @@ class PopupManager {
                 const capInput = document.getElementById('urlUploadCaptionInput');
                 if (capInput) telegramCaption = capInput.value.trim();
             }
+            const audioOnlyCheckbox = document.querySelector('[selector="urlUploadAudioOnlyCheckbox"]');
+            const audioOnly = audioOnlyCheckbox ? audioOnlyCheckbox.checked : false;
+            
             return { 
                 name: fileName, 
                 url: url, 
@@ -5069,9 +5102,26 @@ class PopupManager {
                 resolution, 
                 uploadService: service, 
                 telegramCaption, 
+                audioOnly,
                 customList: customHostListUrlUpload 
             };
         };
+
+        if (this.$urlUploadWatchBtnPopup) {
+            this.$urlUploadWatchBtnPopup.onclick = (e) => {
+                e.preventDefault();
+                const itemData = getPopupUrlDetails();
+                if (!itemData) { this.toast("Please enter a valid URL.", true); return; }
+                let pUrl = `player.html?url=${encodeURIComponent(itemData.originalUrl)}`;
+                if (itemData.selectedVariantUrl && itemData.selectedVariantUrl !== itemData.originalUrl) {
+                    pUrl += `&variant=${encodeURIComponent(itemData.selectedVariantUrl)}`;
+                }
+                if (itemData.audioOnly) {
+                    pUrl += `&audioOnly=true`;
+                }
+                chrome.tabs.create({ url: pUrl });
+            };
+        }
 
         if (this.$urlDownloadLocalBtnPopup) {
             this.$urlDownloadLocalBtnPopup.onclick = (e) => {
@@ -5159,6 +5209,15 @@ class PopupManager {
                         telegramCaption = captionInput.value.trim();
                     }
                     
+                    const audioOnlyCheckbox = document.querySelector('[selector="urlUploadAudioOnlyCheckbox"]');
+                    const audioOnly = audioOnlyCheckbox ? audioOnlyCheckbox.checked : false;
+
+                    if (audioOnly && fileName.toLowerCase().endsWith(".mp4")) {
+                        fileName = fileName.substring(0, fileName.lastIndexOf(".")) + ".m4a";
+                    } else if (audioOnly && !fileName.toLowerCase().endsWith(".m4a")) {
+                        fileName += ".m4a";
+                    }
+                    
                     const payloadCreds = { ...(this.options.serverUpload?.credentials || {}) };
                     if (telegramCaption) {
                         payloadCreds.caption = telegramCaption;
@@ -5175,7 +5234,8 @@ class PopupManager {
                             service: service,
                             resolution: resolution,
                             credentials: payloadCreds,
-                            telegramCaption: telegramCaption
+                            telegramCaption: telegramCaption,
+                            audioOnly: audioOnly
                         }
                     }, (response) => {
                         if (chrome.runtime.lastError || (response && !response.success)) {
@@ -5794,9 +5854,19 @@ class PopupManager {
                 this.$empty?.classList.add("d-none");
                 this.$disable?.classList.add("d-none");
                 this.$container?.classList.remove("d-none");
+                
+                const renderedHlsDirs = new Set();
                 for (const key in storedItems) {
                     try {
-                        this.itemCreate(storedItems[key]);
+                        const item = storedItems[key];
+                        if (item.type === "hls" && item.url) {
+                            try {
+                                const urlDir = item.url.substring(0, item.url.lastIndexOf('/'));
+                                if (renderedHlsDirs.has(urlDir)) continue;
+                                renderedHlsDirs.add(urlDir);
+                            } catch (e) {}
+                        }
+                        this.itemCreate(item);
                     } catch (err) {
                         console.error("[FetchStream] Error rendering stream item:", err, storedItems[key]);
                     }

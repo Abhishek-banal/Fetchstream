@@ -127,12 +127,14 @@
                 
                 <input type="text" id="serverUrlFileNameInput" class="form-control form-control-sm" placeholder="Filename (e.g. video.mp4)" style="display: none;">
                 
+                <div class="form-check form-switch mt-1 ms-1">
+                    <input class="form-check-input" type="checkbox" role="switch" id="urlUploadAudioOnlyCheckbox" style="transform: scale(0.9); margin-top: 2px;">
+                    <label class="form-check-label text-muted" style="font-size: 0.85rem;"><i class="bi bi-music-note"></i> Audio Only</label>
+                </div>
+                
                 <!-- HLS Variants Container -->
                 <div id="urlUploadVariantsContainer" class="d-flex flex-column gap-1 d-none" style="margin-top: -2px; margin-bottom: 2px;">
-                  <div class="d-flex gap-2 align-items-center">
                     <select id="urlUploadVariantSelect" class="form-select form-select-sm" style="font-size: 0.85rem; padding: 4px 8px; min-width: 0;"></select>
-                    <button id="urlUploadWatchBtn" class="btn btn-sm btn-primary py-1 px-3 d-flex align-items-center gap-1" style="font-size: 0.8rem;"><i class="bi bi-play-fill"></i> Watch</button>
-                  </div>
                 </div>
 
                 <div id="urlUploadCaptionContainer" class="telegram-caption-row d-none mt-2 mb-2">
@@ -147,7 +149,7 @@
                 <div class="d-flex gap-2">
                     <div class="dropdown flex-grow-1">
                         <button type="button" id="urlUploadServiceSelectBtn" class="btn btn-sm btn-outline-secondary w-100 dropdown-toggle text-start d-flex justify-content-between align-items-center" data-bs-toggle="dropdown" aria-expanded="false" style="background: white;">
-                            <span><i class="bi bi-cloud-arrow-up me-1"></i> <span id="urlUploadServiceSelectText">Dest: GoFile</span></span>
+                            <span id="urlUploadServiceSelectText"><i class="bi bi-cloud-arrow-up me-1.5 text-success"></i> GoFile</span>
                         </button>
                         <ul class="dropdown-menu shadow-sm" id="urlUploadDropdownMenu" style="font-size: 0.85rem; min-width: 100%;">
                             <li><button class="dropdown-item py-1" type="button" data-service="gofile.io"><i class="bi bi-cloud-arrow-up me-1.5 text-success"></i> GoFile</button></li>
@@ -165,6 +167,7 @@
                     </div>
                     
                     <div class="d-flex gap-1 flex-shrink-0">
+                        <button id="urlUploadWatchBtn" class="btn btn-sm btn-outline-primary" title="Watch"><i class="bi bi-play-fill"></i></button>
                         <button id="urlDownloadLocalBtn" class="btn btn-sm btn-outline-success" title="Download to PC"><i class="bi bi-download"></i></button>
                         <button id="urlUploadLocalBtn" class="btn btn-sm btn-outline-info" title="Local Upload (via Browser)"><i class="bi bi-pc-display"></i></button>
                         <button id="serverUploadSubmitBtn" class="btn btn-sm btn-primary" disabled>

@@ -1022,7 +1022,7 @@ class FetchStreamUploader {
             throw new Error(`File size (${sizeStr}) exceeds the standard 50 MB Telegram Bot API limit. If you have Remote Server URL configured in Server Upload settings, please use 'Server Upload' to send files up to 2 GB via your runner.`);
         }
 
-        return new Promise((resolve, reject) => {
+        return new Promise(async (resolve, reject) => {
             const formData = new FormData();
             formData.append('chat_id', chatId);
             formData.append(fieldName, file, name);
@@ -1034,10 +1034,39 @@ class FetchStreamUploader {
             formData.append('caption', captionText);
             
             const customDuration = creds?.duration || allCreds?.telegram?.duration || allCreds?.duration;
-            if (customDuration) {
-                formData.append('duration', parseInt(customDuration, 10));
+            let finalDuration = customDuration ? parseInt(customDuration, 10) : null;
+            let finalWidth = null;
+            let finalHeight = null;
+
+            if (isVideo && !finalDuration && typeof window !== 'undefined' && file instanceof Blob) {
+                try {
+                    await new Promise((resolve) => {
+                        const vid = document.createElement('video');
+                        const objUrl = URL.createObjectURL(file);
+                        vid.preload = 'metadata';
+                        vid.onloadedmetadata = () => {
+                            if (vid.duration && vid.duration !== Infinity) {
+                                finalDuration = Math.round(vid.duration);
+                            }
+                            if (vid.videoWidth && vid.videoHeight) {
+                                finalWidth = vid.videoWidth;
+                                finalHeight = vid.videoHeight;
+                            }
+                            URL.revokeObjectURL(objUrl);
+                            resolve();
+                        };
+                        vid.onerror = () => {
+                            URL.revokeObjectURL(objUrl);
+                            resolve();
+                        };
+                        vid.src = objUrl;
+                    });
+                } catch (e) {}
             }
-            
+
+            if (finalDuration) formData.append('duration', finalDuration);
+            if (finalWidth) formData.append('width', finalWidth);
+            if (finalHeight) formData.append('height', finalHeight);
             
             if (isVideo) {
                 formData.append('supports_streaming', 'true');

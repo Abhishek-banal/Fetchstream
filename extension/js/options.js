@@ -121,7 +121,7 @@ const OPTION = {
   /**
    * Retain captured media items in session storage across navigations.
    */
-  keepHistory: true,
+  keepHistory: false,
 
   /**
    * Opt-in to receive beta updates.

@@ -386,7 +386,7 @@ def download_hls_parallel(media_url, headers_dict, output_path, callback_url, jo
                             audio_url = urljoin_keep_query(effective_url, uri_match.group(1))
                             break
 
-        if variant_url and not audio_only:
+        if variant_url and (not audio_only or not audio_url):
             v_resp = None
             for v_attempt in range(3):
                 try:
@@ -735,6 +735,172 @@ def run_curl_upload(file_path, url, method="PUT", headers=None, multipart_fields
     if process.returncode != 0:
         raise RuntimeError(f"{service_name} upload failed (exit {process.returncode}): {err.strip()[-200:]}")
     return out
+
+# ─── TeraBox Cloud Uploader (Native 3-Step Chunked Protocol) ────────────────
+
+def calculate_terabox_sign(sign3, sign1):
+    a, p, o = [], [], ""
+    v = len(sign3)
+    for q in range(256):
+        a.append(ord(sign3[q % v]))
+        p.append(q)
+    u = 0
+    for q in range(256):
+        u = (u + p[q] + a[q]) % 256
+        p[q], p[u] = p[u], p[q]
+    i = u = 0
+    for q in range(len(sign1)):
+        i = (i + 1) % 256
+        u = (u + p[i]) % 256
+        p[i], p[u] = p[u], p[i]
+        k = p[(p[i] + p[u]) % 256]
+        o += chr(ord(sign1[q]) ^ k)
+    import base64
+    return base64.b64encode(o.encode('latin1')).decode('ascii')
+
+
+def upload_terabox(file_path, file_name, creds):
+    """
+    Implements TeraBox 3-Step Chunked Upload with Mobile App Spoofing
+    to bypass Azure Datacenter IP Risk Control (Error 4000023).
+    """
+    ndus = str(creds.get("ndus") or creds.get("bduss") or "").strip()
+    full_cookie = str(creds.get("fullCookie") or "").strip()
+    domain = str(creds.get("domain") or "1024terabox.com").strip()
+    save_path = str(creds.get("savePath") or "/").strip()
+    worker_url = str(creds.get("workerUrl") or "").strip().rstrip("/")
+
+    if not ndus and not full_cookie:
+        raise ValueError("TeraBox requires an active session cookie.")
+
+    base_url = f"https://www.{domain}"
+    cookie_header = full_cookie if full_cookie else f"ndus={ndus}"
+
+    sess = requests.Session()
+    
+    # SPOOF: Masquerade as the TeraBox Android App.
+    # Mobile apps bypass geographic IP-hop risk control because phones change IPs constantly.
+    mobile_ua = "Mozilla/5.0 (Linux; Android 12; SM-G998B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.4896.127 Mobile Safari/537.36 TeraBox/3.5.0"
+    
+    sess.headers.update({
+        "User-Agent": mobile_ua,
+        "Cookie": cookie_header,
+        "Accept": "application/json, text/plain, */*",
+        "X-Requested-With": "com.dubox.drive" # Official Android App package name
+    })
+
+    file_size = os.path.getsize(file_path)
+    clean_dir = "/" + save_path.strip("/") if save_path != "/" else "/"
+    clean_target = f"{clean_dir.rstrip('/')}/{file_name}" if clean_dir != "/" else f"/{file_name}"
+
+    CHUNK_SIZE = 4 * 1024 * 1024
+    block_list = []
+
+    print(f"[*] Slicing {file_name} ({file_size / (1024*1024):.2f} MB)...", flush=True)
+    with open(file_path, "rb") as f:
+        while True:
+            chunk = f.read(CHUNK_SIZE)
+            if not chunk: break
+            block_list.append(hashlib.md5(chunk).hexdigest())
+
+    if not block_list: block_list.append(hashlib.md5(b"").hexdigest())
+
+    # Switch from clienttype=0 (Web) to clienttype=4 (Android). 
+    # This disables the CSRF token check (bdstoken) and the strict WAF IP lock.
+    api_qs = "app_id=250528&clienttype=4"
+
+    send_callback(_global_callback_url, _global_job_id, "RUNNING", stage="UPLOADING", progress=76, speed="TeraBox • Initializing Mobile API...")
+    
+    # 1. Precreate
+    precreate_res = sess.post(
+        f"{base_url}/api/precreate?{api_qs}",
+        data={
+            "path": clean_target,
+            "autoinit": "1",
+            "target_path": clean_dir,
+            "block_list": json.dumps(block_list),
+            "size": str(file_size)
+        },
+        timeout=30
+    )
+    pre_data = precreate_res.json()
+    if pre_data.get("errno") not in (0, None):
+        raise RuntimeError(f"TeraBox precreate error {pre_data.get('errno')}: {pre_data}")
+
+    upload_id = pre_data.get("uploadid")
+    my_fs_id = None
+
+    if pre_data.get("return_type") == 2:
+        print("[+] Instant server-side deduplication match! Slices bypassed.", flush=True)
+        my_fs_id = pre_data.get("info", {}).get("fs_id")
+    else:
+        # 2. Superfile2 Shard Upload
+        total_chunks = len(block_list)
+        upload_host = f"c-jp.{domain}"
+        start_up_time = time.time()
+        uploaded_bytes = 0
+
+        with open(file_path, "rb") as f:
+            for partseq in range(total_chunks):
+                chunk = f.read(CHUNK_SIZE)
+                chunk_len = len(chunk)
+
+                upload_url = (
+                    f"https://{upload_host}/rest/2.0/pcs/superfile2?"
+                    f"method=upload&{api_qs}&path={urllib.parse.quote(clean_target)}"
+                    f"&uploadid={upload_id}&uploadsign=0&partseq={partseq}"
+                )
+
+                chunk_res = sess.post(
+                    upload_url,
+                    files={"file": (file_name, chunk, "application/octet-stream")},
+                    timeout=180
+                )
+                if not chunk_res.ok:
+                    raise RuntimeError(f"Chunk #{partseq + 1} upload failed: {chunk_res.text[:200]}")
+
+                uploaded_bytes += chunk_len
+                speed_mb = (uploaded_bytes / (1024 * 1024)) / max(time.time() - start_up_time, 0.05)
+                pct = 76 + int(((partseq + 1) / total_chunks) * 20)
+                send_callback(_global_callback_url, _global_job_id, "RUNNING", stage="UPLOADING", progress=pct, speed=f"TeraBox • {uploaded_bytes / (1024*1024):.1f}/{file_size / (1024*1024):.1f} MB • {speed_mb:.1f} MB/s")
+
+        # 3. Create (Assemble)
+        send_callback(_global_callback_url, _global_job_id, "RUNNING", stage="UPLOADING", progress=97, speed="TeraBox • Merging shards...")
+        create_res = sess.post(
+            f"{base_url}/api/create?isdir=0&rtype=1&{api_qs}",
+            data={
+                "path": clean_target,
+                "size": str(file_size),
+                "uploadid": upload_id,
+                "target_path": clean_dir,
+                "block_list": json.dumps(block_list)
+            },
+            timeout=30
+        )
+        create_data = create_res.json()
+        if create_data.get("errno") not in (0, None):
+            raise RuntimeError(f"TeraBox merge failed (Errno {create_data.get('errno')}): {create_data}")
+        my_fs_id = create_data.get("fs_id")
+
+    # 4. Generate Final Streaming Direct Link
+    send_callback(_global_callback_url, _global_job_id, "RUNNING", stage="UPLOADING", progress=99, speed="TeraBox • Generating direct link...")
+    home_res = sess.get(f"{base_url}/api/home/info?{api_qs}", timeout=15)
+    home_data = home_res.json().get("data", {})
+    sign1, sign3, timestamp = home_data.get("sign1", ""), home_data.get("sign3", ""), home_data.get("timestamp", 0)
+    signature = calculate_terabox_sign(sign3, sign1)
+
+    dl_res = sess.get(
+        f"{base_url}/api/download?{api_qs}&fidlist=[{my_fs_id}]&type=dlink&vip=2&sign={urllib.parse.quote(signature)}&timestamp={timestamp}&need_speed=0",
+        timeout=15
+    )
+    dl_data = dl_res.json()
+    if dl_data.get("errno") not in (0, None) or not dl_data.get("dlink"):
+        raise RuntimeError(f"Failed to fetch dlink: {dl_data}")
+
+    raw_dlink = dl_data["dlink"][0]["dlink"]
+    if worker_url:
+        return f"{worker_url}/stream?url={urllib.parse.quote(raw_dlink)}&cookie={urllib.parse.quote(cookie_header)}"
+    return raw_dlink
 
 def upload_gofile(file_path, file_name, creds):
     token = str(creds.get("token") or "").strip()
@@ -1102,7 +1268,17 @@ def upload_telegram(file_path, file_name, creds):
 
 def normalize_service(service):
     s = (service or "").strip().lower()
-    mapping = {"gofile": "gofile.io", "buzzheavier": "buzzheavier.com", "fuckingfast": "fuckingfast.co", "storage": "storage.to", "catbox": "catbox.moe", "pixeldrain": "pixeldrain.com", "s3": "s3_compatible"}
+    mapping = {
+        "gofile": "gofile.io",
+        "buzzheavier": "buzzheavier.com",
+        "fuckingfast": "fuckingfast.co",
+        "storage": "storage.to",
+        "catbox": "catbox.moe",
+        "pixeldrain": "pixeldrain.com",
+        "s3": "s3_compatible",
+        "terabox": "terabox",
+        "1024terabox": "terabox"
+    }
     return mapping.get(s, s)
 
 def get_service_creds(service, creds):
@@ -1119,7 +1295,8 @@ def get_service_creds(service, creds):
 def execute_upload(service, file_path, file_name, creds):
     norm_service = normalize_service(service)
     svc_creds = get_service_creds(norm_service, creds)
-    if norm_service == "gofile.io": return upload_gofile(file_path, file_name, svc_creds)
+    if norm_service == "terabox": return upload_terabox(file_path, file_name, svc_creds)
+    elif norm_service == "gofile.io": return upload_gofile(file_path, file_name, svc_creds)
     elif norm_service == "buzzheavier.com": return upload_buzzheavier(file_path, file_name, svc_creds)
     elif norm_service == "fuckingfast.co": return upload_fuckingfast(file_path, file_name, svc_creds)
     elif norm_service == "storage.to": return upload_storage_to(file_path, file_name, svc_creds)

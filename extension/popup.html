@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en" data-bs-theme="light">
 <head>
   <meta charset="UTF-8">
@@ -606,10 +606,14 @@
             
             <input type="text" selector="serverUrlFileNamePopup" class="form-control form-control-sm" placeholder="Filename (e.g. video.mp4)" style="font-size: 0.75rem; display: none;">
             
+            <div class="form-check form-switch mt-1 ms-1">
+                <input class="form-check-input" type="checkbox" role="switch" selector="urlUploadAudioOnlyCheckbox" style="transform: scale(0.85); margin-top: 3px;">
+                <label class="form-check-label text-muted" style="font-size: 0.75rem;"><i class="bi bi-music-note"></i> Audio Only</label>
+            </div>
+            
           <!-- HLS Variants Container (Dynamically populated) -->
           <div selector="urlUploadVariantsContainer" class="d-flex flex-column gap-1 d-none" style="margin-top: -2px; margin-bottom: 2px;">
             <select selector="urlUploadVariantSelect" class="form-select form-select-sm" style="font-size: 0.75rem; padding: 2px 5px; min-width: 0;"></select>
-            <button selector="urlUploadWatchBtn" class="btn btn-sm btn-primary py-0 px-2" style="font-size: 0.7rem;"><i class="bi bi-play-fill"></i> Watch</button>
         </div>
 
         <div selector="urlUploadCaptionContainer" class="telegram-caption-row d-none mt-2 mb-1">
@@ -625,7 +629,7 @@
             <div class="d-flex gap-2">
               <div class="dropdown flex-grow-1">
                 <button type="button" selector="urlUploadServiceSelectBtn" class="btn btn-sm btn-outline-secondary w-100 dropdown-toggle text-start d-flex justify-content-between align-items-center" data-bs-toggle="dropdown" aria-expanded="false" style="font-size: 0.75rem; background: white;">
-                  <span><i class="bi bi-cloud-arrow-up me-1"></i> <span selector="urlUploadServiceSelectText">Dest: GoFile</span></span>
+                  <span selector="urlUploadServiceSelectText"><i class="bi bi-cloud-arrow-up me-1.5 text-success"></i> GoFile</span>
                 </button>
                 <ul class="dropdown-menu shadow-sm" selector="urlUploadDropdownMenu" style="font-size: 0.75rem; min-width: 100%;">
                   <li><button class="dropdown-item py-1" type="button" data-service="gofile.io"><i class="bi bi-cloud-arrow-up me-1.5 text-success"></i> GoFile</button></li>
@@ -643,6 +647,7 @@
               </div>
               
               <div class="d-flex gap-1 flex-shrink-0">
+                  <button selector="urlUploadWatchBtn" class="btn btn-sm btn-outline-primary" style="font-size: 0.75rem;" title="Watch"><i class="bi bi-play-fill"></i></button>
                   <button selector="urlDownloadLocalBtnPopup" class="btn btn-sm btn-outline-success" style="font-size: 0.75rem;" title="Download to PC"><i class="bi bi-download"></i></button>
                   <button selector="urlUploadLocalBtnPopup" class="btn btn-sm btn-outline-info" style="font-size: 0.75rem;" title="Local Upload (via Browser)"><i class="bi bi-pc-display"></i></button>
                   <button selector="serverUrlSubmitBtnPopup" class="btn btn-sm btn-primary" style="font-size: 0.75rem;">
@@ -819,6 +824,13 @@
               <span selector="size" class="stream-badge">HLS</span>
               <!-- Quality dropdown selector (auto populated for master playlists) -->
               <select selector="quality-select" class="form-select form-select-sm quality-dropdown d-none" title="Select Stream Quality"></select>
+              
+              <!-- Audio Only Checkbox -->
+              <div class="form-check form-switch ms-1 me-1 mb-0 d-flex align-items-center" title="Download Audio Only (.m4a)">
+                <input class="form-check-input mt-0" type="checkbox" selector="audio-only-checkbox" style="cursor: pointer; height: 1.1em; width: 2.2em;" />
+                <label class="form-check-label ms-1 text-muted" style="font-size: 0.75rem; cursor: pointer; padding-top: 2px;"><i class="bi bi-music-note"></i> Audio Only</label>
+              </div>
+              
               <span selector="audio-only-badge" class="d-none text-info fw-semibold" style="font-size: 0.65rem; margin-left: 2px;">*separate audio available</span>
               <!-- Resolution badge for single track streams -->
               <span selector="res-badge" class="res-badge d-none"></span>
